@@ -1,0 +1,24 @@
+# Terraform
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+tfplan
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Local temp files
+last_glue_run_id.txt
+*.log
+*.tmp
+
+# Secrets
+secrets.auto.tfvars
+.env
+*.pem
+*.key
+
+# macOS junk
+.DS_Store
