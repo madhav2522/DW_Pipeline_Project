@@ -1,113 +1,59 @@
-import re
-import sys
-from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
-from awsglue.context import GlueContext
-from awsglue.job import Job
+#!/usr/bin/env python3
+# Glue 4.0 (Spark 3.x) — students_only
+# Reads:  s3://<RAW_BUCKET>/<STUDENTS_KEY>
+# Writes: s3://<RAW_BUCKET>/<CURATED_PREFIX>/students_transformed/run=YYYYMMDDThhmmssZ/
 
-# -------- Defaults that match your Terraform outputs --------
-RAW_BUCKET = "myproject-raw-data-103259692325-us-east-2"
+import argparse
+from datetime import datetime
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, trim
+from pyspark.sql.types import IntegerType, LongType, StringType
 
-DEFAULT_STUDENTS_PATH = f"s3://{RAW_BUCKET}/students/students.csv"
-DEFAULT_EXAMS_PATH    = f"s3://{RAW_BUCKET}/exams/exams.csv"
+# Parse args (tolerant to extra Glue args)
+p = argparse.ArgumentParser()
+p.add_argument("--RAW_BUCKET", required=True)
+p.add_argument("--STUDENTS_KEY", required=True)       # e.g., students/students_large.csv
+p.add_argument("--CURATED_PREFIX", default="curated")  # e.g., curated
+p.add_argument("--RUN_ID", default=None)
+args, _ = p.parse_known_args()
 
-DEFAULT_CURATED_STUDENTS = f"s3://{RAW_BUCKET}/curated/students/"
-DEFAULT_CURATED_EXAMS    = f"s3://{RAW_BUCKET}/curated/exams/"
-DEFAULT_CURATED_JOINED   = f"s3://{RAW_BUCKET}/curated/joined_students_exams/"
+RAW_BUCKET     = args.RAW_BUCKET
+STUDENTS_KEY   = args.STUDENTS_KEY
+CURATED_PREFIX = args.CURATED_PREFIX
+RUN_ID         = args.RUN_ID or datetime.utcnow().strftime("run=%Y%m%dT%H%M%SZ")
 
-# -------- Parse Glue args (with safe defaults) --------
-# Optional runtime overrides (all optional):
-# --students_path, --exams_path, --curated_students, --curated_exams, --curated_joined
-optional_args = [
-    "students_path",
-    "exams_path",
-    "curated_students",
-    "curated_exams",
-    "curated_joined",
-]
-base_args = ["JOB_NAME"]
-provided = set(sys.argv)
-opt_keys = base_args + [k for k in optional_args if f"--{k}" in provided]
-args = getResolvedOptions(sys.argv, opt_keys)
+spark = SparkSession.builder.appName("students-only-etl").getOrCreate()
+spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
 
-students_path    = args.get("students_path", DEFAULT_STUDENTS_PATH)
-exams_path       = args.get("exams_path", DEFAULT_EXAMS_PATH)
-curated_students = args.get("curated_students", DEFAULT_CURATED_STUDENTS)
-curated_exams    = args.get("curated_exams", DEFAULT_CURATED_EXAMS)
-curated_joined   = args.get("curated_joined", DEFAULT_CURATED_JOINED)
+src  = f"s3://{RAW_BUCKET}/{STUDENTS_KEY}"
+dest = f"s3://{RAW_BUCKET}/{CURATED_PREFIX}/students_transformed/{RUN_ID}/"
 
-# -------- Glue/Spark bootstrap --------
-sc = SparkContext()
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
-job = Job(glueContext)
-job.init(args["JOB_NAME"], args)
+# Read raw CSV
+df = (spark.read.option("header","true")
+              .option("inferSchema","true")
+              .csv(src))
 
-def normalize_col(c: str) -> str:
-    # Trim, lower-case, replace spaces & non-word chars with underscores, collapse repeats
-    c = c.strip().lower()
-    c = re.sub(r"[^\w]+", "_", c)
-    c = re.sub(r"_+", "_", c).strip("_")
-    return c
+# Normalize column names -> snake_case-ish
+def norm(n: str) -> str: return n.strip().lower().replace(" ", "_")
+for c in df.columns:
+    df = df.withColumnRenamed(c, norm(c))
 
-def clean_df(df):
-    # Drop fully empty rows, normalize column names, drop exact duplicates
-    df2 = df.dropna(how="all")
-    for c in df2.columns:
-        newc = normalize_col(c)
-        if newc != c:
-            df2 = df2.withColumnRenamed(c, newc)
-    return df2.dropDuplicates()
+# Trim only (no lowercasing of values)
+for f in df.schema.fields:
+    if isinstance(f.dataType, StringType):
+        df = df.withColumn(f.name, trim(col(f.name)))
 
-# -------- Read RAW CSVs --------
-students_df = (
-    spark.read
-         .option("header", "true")
-         .option("inferSchema", "true")
-         .csv(students_path)
-)
-exams_df = (
-    spark.read
-         .option("header", "true")
-         .option("inferSchema", "true")
-         .csv(exams_path)
-)
+# Casts for your columns if present
+if "student_id" in df.columns:
+    df = df.withColumn("student_id", col("student_id").cast(LongType()))
+if "age" in df.columns:
+    df = df.withColumn("age", col("age").cast(IntegerType()))
 
-# -------- Clean --------
-students_clean = clean_df(students_df)
-exams_clean    = clean_df(exams_df)
+# Keep valid rows, simple de-dupe by student_id
+if "student_id" in df.columns:
+    df = df.filter(col("student_id").isNotNull()).dropDuplicates(["student_id"])
 
-# -------- Write curated (separate) --------
-(students_clean.coalesce(1)
-               .write.mode("overwrite")
-               .parquet(curated_students))
-
-(exams_clean.coalesce(1)
-            .write.mode("overwrite")
-            .parquet(curated_exams))
-
-print(f"[INFO] Wrote curated students to: {curated_students}")
-print(f"[INFO] Wrote curated exams to   : {curated_exams}")
-
-# -------- Optional join on student_id (if present in both) --------
-join_key = "student_id"
-if join_key in [c.lower() for c in students_clean.columns] and join_key in [c.lower() for c in exams_clean.columns]:
-    # Ensure the column names match exactly (after normalization they should)
-    # Left join: keep all students; bring matching exams columns with suffixes where needed
-    # To avoid duplicate column names after join, add prefix to exams columns (except the key).
-    exams_prefixed = exams_clean
-    for c in exams_clean.columns:
-        if c != join_key and c in students_clean.columns:
-            exams_prefixed = exams_prefixed.withColumnRenamed(c, f"exams_{c}")
-
-    joined = students_clean.join(exams_prefixed, on=join_key, how="left")
-
-    (joined.coalesce(1)
-           .write.mode("overwrite")
-           .parquet(curated_joined))
-    print(f"[INFO] Wrote curated joined dataset to: {curated_joined}")
-else:
-    print(f"[INFO] Skipping join: '{join_key}' not found in both datasets. "
-          f"students cols: {students_clean.columns} | exams cols: {exams_clean.columns}")
-
-job.commit()
+# Write curated parquet
+df.repartition(32).write.mode("overwrite").parquet(dest)
+print(f"✅ Wrote curated parquet to: {dest}")
+spark.stop()

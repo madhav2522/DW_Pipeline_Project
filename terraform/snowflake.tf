@@ -1,7 +1,7 @@
 # FILE: snowflake.tf
 # Warehouse (ensure it exists or let TF create below)
 resource "snowflake_warehouse" "wh" {
-  name = "COMPUTE_WH"
+  name                         = "COMPUTE_WH"
   statement_timeout_in_seconds = 300
   auto_suspend                 = 300
   auto_resume                  = true

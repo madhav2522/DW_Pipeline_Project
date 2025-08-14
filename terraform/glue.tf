@@ -1,3 +1,4 @@
+/*
 # FILE: glue.tf
 resource "aws_glue_catalog_database" "db" {
   name = "${var.project_name}_db"
@@ -5,13 +6,19 @@ resource "aws_glue_catalog_database" "db" {
 
 # Minimal Glue Job that points at the uploaded script.
 resource "aws_glue_job" "etl" {
-  name     = "${var.project_name}-glue-etl"
-  role_arn = aws_iam_role.glue_role.arn
+  count      = 0  # disable creation for now; we’ll enable later
+  name       = "${var.project_name}-etl"
+  role_arn   = "arn:aws:iam::${var.account_id}:role/${var.project_name}-glue-role"
 
-  command {
+  glue_version       = "4.0"
+  number_of_workers  = 2
+  worker_type        = "G.1X"
+  timeout            = 30
+
+    command {
     name            = "glueetl"
+    script_location = "s3://myproject-etl-scripts/glue_job.py"
     python_version  = "3"
-    script_location = "s3://${aws_s3_bucket.scripts.bucket}/${aws_s3_object.glue_job_script.key}"
   }
 
   default_arguments = {
@@ -27,3 +34,5 @@ resource "aws_glue_job" "etl" {
   max_retries  = 1
   timeout      = 30
 }
+
+*/

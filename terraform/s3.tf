@@ -20,7 +20,7 @@ resource "aws_s3_bucket_versioning" "scripts" {
 resource "aws_s3_object" "glue_job_script" {
   bucket = aws_s3_bucket.scripts.id
   key    = "etl_scripts/glue_job.py"
-  etag = filemd5("../etl_scripts/glue_job.py")
+  etag   = filemd5("../etl_scripts/glue_job.py")
   source = "../etl_scripts/glue_job.py"
 
 }
