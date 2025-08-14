@@ -16,7 +16,7 @@ last_glue_run_id.txt
 
 # Large data files
 # Ignore CSVs in data/ and scripts/data/ folders (large datasets)
-data/*.csv
+data
 scripts/data/*.csv
 
 # Secrets
