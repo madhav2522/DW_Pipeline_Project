@@ -60,3 +60,46 @@ resource "aws_iam_role" "glue_role" {
   name               = "${var.project_name}-glue-role"
   assume_role_policy = data.aws_iam_policy_document.glue_assume.json
 }
+
+#########################################################
+# Snowflake stage reader - allow read-only on curated/**
+#########################################################
+
+# Use the existing IAM user created outside Terraform
+data "aws_iam_user" "snowflake_stage_reader" {
+  user_name = "snowflake-stage-reader"
+}
+
+# Policy granting minimal read access to curated/ prefix
+data "aws_iam_policy_document" "snowflake_curated_read" {
+  statement {
+    sid     = "ListCuratedPrefix"
+    actions = ["s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [
+      "arn:aws:s3:::myproject-raw-data-103259692325-us-east-2"
+    ]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["curated/*"]
+    }
+  }
+
+  statement {
+    sid       = "ReadCuratedObjects"
+    actions   = ["s3:GetObject"]
+    resources = [
+      "arn:aws:s3:::myproject-raw-data-103259692325-us-east-2/curated/*"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "snowflake_curated_read" {
+  name   = "${var.project_name}-snowflake-curated-read"
+  policy = data.aws_iam_policy_document.snowflake_curated_read.json
+}
+
+resource "aws_iam_user_policy_attachment" "snowflake_curated_read_attach" {
+  user       = data.aws_iam_user.snowflake_stage_reader.user_name
+  policy_arn = aws_iam_policy.snowflake_curated_read.arn
+}

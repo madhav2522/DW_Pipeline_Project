@@ -61,7 +61,7 @@ resource "snowflake_table" "exams" {
   }
   column {
     name = "SCORE"
-    type = "NUMBER(5,2)"
+    type = "NUMBER"
   }
   column {
     name = "TAKEN_AT"

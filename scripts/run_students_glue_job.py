@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os, time
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import boto3
 import snowflake.connector
 
@@ -119,7 +119,7 @@ def copy_into_snowflake(s3_loc):
 def main():
     glue = boto3.client("glue", region_name=REGION)
 
-    run_id = datetime.now(UTC).strftime("run=%Y%m%dT%H%M%SZ")
+    run_id = datetime.now(timezone.utc).strftime("run=%Y%m%dT%H%M%SZ")
     print("RUN_ID:", run_id)
 
     # 1) run ETL
