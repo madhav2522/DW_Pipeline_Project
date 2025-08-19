@@ -1,23 +1,43 @@
-# DW_Pipeline_Project — S3 → Glue ETL → Parquet → Glue Catalog → Snowflake
+# DW_Pipeline_Project — S3(RAW) → Glue ETL → Parquet → Glue Catalog → S3(CURATED)→ Snowflake 
+
+## 📑 Table of Contents
+1. [Overview](#-overview)
+2. [Problem Statement](#-problem-statement)
+3. [Tech Stack](#-tech-stack)
+4. [Architecture](#-architecture)
+5. [Repository Structure](#-repository-structure)
+6. [Prerequisites](#-prerequisites)
+7. [Provision Infrastructure](#-provision-infrastructure-with-terraform)
+8. [Running the Pipeline](#-running-the-pipeline-end-to-end)
+9. [ETL Transformations](#-etl-transformations-typical)
+10. [Glue Catalog Behavior](#-glue-catalog-behavior)
+11. [Validation in Snowflake](#-validation-in-snowflake)
+12. [Acceptance Criteria](#-acceptance-criteria-assignment-4)
+13. [Troubleshooting](#-troubleshooting)
+14. [Security & Git Hygiene](#-security--git-hygiene)
+15. [License](#-license)
+
+---
 
 ## 📌 Overview
-This project implements a **batch data warehouse pipeline** that ingests a large CSV dataset into **Amazon S3**, transforms it with **AWS Glue** (Apache Spark), catalogs the curated data with **Glue Data Catalog**, and loads the latest partition into **Snowflake**.
+This project implements a **batch data warehouse pipeline** that ingests **student-related CSV datasets** (*Students*, *Exams*) into **Amazon S3**, transforms them with **AWS Glue** (Apache Spark), catalogs curated Parquet data with **Glue Data Catalog**, and loads the latest partitions into **Snowflake** for analytics.
 
-The goal is to create a **fully automated, reproducible ETL workflow** using **Terraform** and **AWS SDK (boto3)** — with **no use of the AWS Management Console**.
+The entire solution is automated with **Terraform** and **AWS SDK (boto3)** — no AWS Management Console involvement.
 
 ---
 
 ## 🎯 Problem Statement
-Manual data ingestion and transformation pipelines are:
+Education analytics requires integrating multiple CSV exports (e.g., students roster, exam results) into a consistent, query-ready warehouse.  
+Manual processes are:
 - Error-prone
 - Slow to deploy
-- Difficult to maintain
+- Hard to maintain
 
-This project addresses these issues by:
-- Automating AWS and Snowflake resource creation with **Terraform**
-- Using **Glue ETL** for scalable, serverless transformations
-- Loading curated data into Snowflake for analytics
-- Dynamically discovering the latest partition in Glue Catalog to avoid hard-coded S3 paths
+This project solves the problem by:
+- Automating resource provisioning with Terraform
+- Using Glue ETL for scalable transformations
+- Loading curated partitions into Snowflake
+- Dynamically discovering the newest partition via Glue Catalog
 
 ---
 
@@ -33,11 +53,11 @@ This project addresses these issues by:
 ## 📊 Architecture
 ```mermaid
 flowchart TD
-    A[Students CSV Data] -->|Python Ingestion| B[S3 Raw Bucket]
-    B -->|Glue RAW Crawler| C[Glue Data Catalog]
-    C -->|Glue ETL (PySpark)| D[S3 Curated (Parquet)]
-    D -->|Snowflake COPY INTO| E[Snowflake STUDENTS_CURATED]
-    E --> F[Analytics / BI]
+    A[Students & Exams CSV Data] -->|Python Ingestion| B[S3 Raw Bucket]
+    B -->|Glue Crawler| C[Glue Data Catalog]
+    C -->|Glue ETL (PySpark)| D[S3 Curated Bucket (Parquet)]
+    D -->|Snowflake COPY INTO| E[Snowflake Tables: STUDENTS_CURATED, EXAMS_CURATED]
+    E --> F[Analytics & BI Tools]
 ```
 
 ---
@@ -53,25 +73,26 @@ DW_Pipeline_Project/
 ├── etl_scripts/
 │   └── glue_job.py
 │
-├── scripts/
-│   ├── data_generation.py
-│   ├── run_students_glue_job.py
-│   ├── run_crawler.py
-│   └── upload_large_to_s3.py
+├── scripts/ # Python orchestration scripts
+│ ├── data_generation.py # Generates synthetic student/exam data
+│ ├── upload_large_to_s3.py # Uploads Students datasets to S3
+│ ├── run_crawler.py # Starts the Glue crawler
+│ └── run_students_glue_job.py # Runs the Glue ETL job
 │
-├── terraform/
-│   ├── glue.tf
-│   ├── iam.tf
-│   ├── outputs.tf
-│   ├── providers.tf
-│   ├── s3.tf
-│   ├── snowflake.tf
-│   ├── variables.tf
-│   ├── versions.tf
-│   ├── terraform.tfstate
-│   ├── terraform.tfstate.backup
-│   ├── terraform.lock.hcl
-│   └── .terraform/ (Terraform cache directory)
+├── terraform/ # Infrastructure as Code (IaC)
+│ ├── glue.tf # Glue jobs & crawlers
+│ ├── iam.tf # IAM roles & policies
+│ ├── locals.tf # Local variables
+│ ├── outputs.tf # Terraform outputs
+│ ├── providers.tf # AWS & Snowflake providers
+│ ├── s3.tf # S3 buckets
+│ ├── secrets.auto.tfvars # Secrets (Snowflake credentials, etc.)
+│ ├── snowflake.tf # Snowflake warehouse, DB, schema, tables
+│ ├── variables.tf # Input variables
+│ ├── versions.tf # Provider versions
+│ ├── terraform.tfstate # Terraform state file
+│ ├── terraform.tfstate.backup # Backup state file
+│ └── .terraform.lock.hcl # Dependency lock file
 │
 ├── .gitignore
 └── README.md
@@ -85,8 +106,7 @@ DW_Pipeline_Project/
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install --upgrade pip
-pip install boto3 "snowflake-connector-python>=3.10,<4.0"
+pip install -r requirements.txt
 ```
 
 ### 2. AWS Environment Variables
@@ -106,7 +126,6 @@ export SNOWFLAKE_SCHEMA=PUBLIC
 ```
 
 ### 4. AWS Read-Only Keys for Snowflake
-(Snowflake will use these to read curated data from S3.)
 ```bash
 export AWS_READ_KEY=<AWS_READ_KEY>
 export AWS_READ_SECRET=<AWS_READ_SECRET>
@@ -124,24 +143,23 @@ terraform apply
 cd ..
 ```
 
-**Terraform will create:**
-- **S3** buckets (raw, ETL scripts, curated)
-- **IAM** roles and policies for Glue
-- **Glue** Job pointing to `etl_scripts/glue_job.py`
-- **Glue Catalog** database and crawler
-- **Snowflake** warehouse, database, schema, and table
+Terraform will create:
+- S3 buckets (raw, ETL scripts, curated)
+- IAM roles & policies for Glue
+- Glue Job pointing to `etl_scripts/glue_job.py`
+- Glue Catalog database & crawler
+- Snowflake warehouse, database, schema, and tables
 
 ---
 
 ## 🚀 Running the Pipeline (End-to-End)
 
-### 1. Upload Raw CSV to S3
+### 1. Upload Raw CSVs to S3
 ```bash
 python3 scripts/upload_large_to_s3.py
 ```
 
 ### 2. Ensure Glue Script Exists in S3
-(Only if Terraform did not upload it already.)
 ```bash
 python3 scripts/upload_etl_script_to_s3.py
 ```
@@ -152,10 +170,37 @@ python3 scripts/run_students_glue_job.py
 ```
 
 This will:
-- Start the Glue ETL job with a unique `RUN_ID` (e.g., `run=20250813T221849Z`)
-- Start the Glue crawler to register the new partition
-- Discover the latest partition in Glue Catalog
-- Run `COPY INTO` in Snowflake to load the new data
+- Start the Glue ETL job with a unique `RUN_ID`
+- Run the Glue crawler to register new curated partitions
+- Discover the newest partitions in Glue Catalog
+- COPY curated data into Snowflake tables
+
+---
+
+## 🔄 ETL Transformations (Typical)
+
+**Students:**
+- Normalize column names → `snake_case`
+- Trim string values
+- Cast `student_id` → BIGINT, `age` → INT
+- Drop rows with NULL `student_id`
+- Remove duplicates on `student_id`
+- Write Parquet → `s3://<bucket>/curated/students_transformed/run=<timestamp>/`
+
+**Exams:**
+- Normalize column names → `snake_case`
+- Trim string values
+- Cast `exam_id` → BIGINT, `student_id` → BIGINT, `score` → INT
+- Drop rows with NULL `exam_id` or `student_id`
+- De-duplicate on (`exam_id`, `student_id`)
+- Write Parquet → `s3://<bucket>/curated/exams_transformed/run=<timestamp>/`
+
+---
+
+## 📒 Glue Catalog Behavior
+- Crawlers target curated paths (students + exams)
+- Each ETL run adds a partition (`run=YYYYMMDDThhmmssZ`)
+- Loader script dynamically finds the newest partitions (no hard-coded S3 paths)
 
 ---
 
@@ -165,49 +210,55 @@ USE WAREHOUSE COMPUTE_WH;
 USE DATABASE MY_DB;
 USE SCHEMA PUBLIC;
 
-SELECT COUNT(*) AS rows, COUNT(DISTINCT student_id) AS distinct_ids
+-- Students
+SELECT COUNT(*) AS rows, COUNT(DISTINCT student_id) AS distinct_students
 FROM STUDENTS_CURATED;
 
 SELECT * FROM STUDENTS_CURATED ORDER BY student_id LIMIT 20;
+
+-- Exams
+SELECT COUNT(*) AS rows, COUNT(DISTINCT exam_id) AS distinct_exams
+FROM EXAMS_CURATED;
+
+SELECT * FROM EXAMS_CURATED ORDER BY exam_id LIMIT 20;
+
+
 ```
 
 ---
 
-## 🔄 ETL Transformations
-- Normalize column names → `snake_case`
-- Trim all string values
-- Cast `student_id` → BIGINT, `age` → INT
-- Drop rows with NULL `student_id`
-- Remove duplicate `student_id` entries
-- Write Parquet output to:
-  ```
-  s3://<BUCKET>/curated/students_transformed/run=<UTC_TIMESTAMP>/
-  ```
+## ✅ Acceptance Criteria (Assignment 4)
+- All resources provisioned with Terraform & AWS SDK (no console usage)  
+- Raw CSVs land in S3 (`raw/` prefixes)  
+- Glue Catalog databases & crawlers discover curated Parquet partitions  
+- Glue ETL transforms Students & Exams into curated Parquet  
+- Snowflake contains integrated tables (`STUDENTS_CURATED`, `EXAMS_CURATED`) ready for analysis  
+- Validation SQL confirms correctness  
+- Repo includes code, IaC, and documentation  
+- Presentation explains architecture, steps, and code implementation  
 
 ---
 
-## 📒 Glue Catalog Behavior
-- Crawler targets `.../curated/students_transformed/`
-- Each ETL run adds a partition (`run=YYYYMMDDThhmmssZ`)
-- Loader script dynamically discovers the newest partition — no hard-coded S3 paths
+## 🛠 Troubleshooting
 
----
+**1. Glue Job fails with module errors**  
+→ Ensure `--additional-python-modules` includes `snowflake-connector-python`, and `requests`.
 
-## ✅ Acceptance Criteria
-- All AWS resources provisioned with **Terraform** and **AWS SDK** (no console usage)  
-- Raw and curated data stored in **S3**  
-- **Glue Catalog** & **Glue ETL** configured to transform and load into **Snowflake**  
-- Snowflake contains integrated data ready for analysis  
-- SQL validation scripts confirm data correctness  
-- Repository contains complete code, infra definitions, and documentation  
-- Presentation prepared for class demo
+**2. COPY INTO Snowflake fails with permissions**  
+→ Verify Snowflake `STORAGE INTEGRATION` role has correct IAM trust + S3 read-only permissions.
+
+**3. Data not visible in Snowflake after ETL run**  
+→ Check Glue Crawler ran successfully and new partitions are visible in Glue Catalog.
+
+**4. Terraform errors with state**  
+→ Run `terraform init -reconfigure` to refresh providers, or clear `.terraform/` cache.
 
 ---
 
 ## 🔐 Security & Git Hygiene
-- **Do not commit** secrets, Terraform state files, or run ID files
-- `.gitignore` includes these sensitive files
-- Rotate any shared keys/passwords after testing
+- Never commit secrets, Terraform state files, or AWS credentials
+- `.gitignore` includes sensitive files
+- Rotate any test keys/passwords immediately after use
 
 ---
 
